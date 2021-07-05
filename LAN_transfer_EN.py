@@ -10,11 +10,13 @@ ip=[]
 if path[1]==':':
 	command='dir /b'
 	D='\\'
+	B=' '
 	for i in ipdict[:2]:
 		ip+='http://'+i[1][1]+':5000\n',
 else:
 	command='ls'
 	D='/'
+	B='\ '
 	for i in ipdict[1:3]:
 		ip+='http://'+i[0][1]+':5000\n',
 
@@ -34,8 +36,12 @@ def html(s):
 	return '<a href="{}">{}<a/>'.format(s,s)
 
 def main(dirpath):
-	dirpath1=dirpath.replace('|',D).replace(' ','\ ')
-	files=os.popen(command+' '+dirpath1).readlines()
+	dirpath1=dirpath.replace('|',D).replace(' ',B)
+	if D=='\\':
+		files=os.popen(command+' '+'"'+dirpath1+'"').readlines()
+	else:
+		files=os.popen(command+' '+dirpath1).readlines()
+	
 	for i in range(len(files)):
 		files[i]=files[i][:-1]
 		if os.path.isdir(dirpath1+D+files[i]):files[i]+='/'
