@@ -1,150 +1,82 @@
 # -*- coding: utf-8 -*-
-from flask import Flask, send_from_directory, request, redirect, url_for
+from http.server import SimpleHTTPRequestHandler, HTTPServer
+from io import BytesIO
 import os
-import psutil
+import socket
 
-path = os.getcwd()
-app = Flask(__name__)
-*ipdict, = psutil.net_if_addrs().values()
 
-ip = []
-if path[1] == ':':
-	command = 'dir /b'
-	D = '\\'
-	B = ' '
-	for i in ipdict[:2]:
-		ip += 'http://' + i[1][1] + ':5000\n',
-else:
-	command = 'ls'
-	D = '/'
-	B = '\\ '
-	for i in ipdict[1:3]:
-		ip += 'http://' + i[0][1] + ':5000\n',
+def get_ips():
+	ips = set()
 
-print()
+	for info in socket.getaddrinfo(socket.gethostname(), None):
+		ip = info[4][0]
+
+		if (
+			"." in ip
+			# and not ip.startswith("127.")
+			# and not ip.startswith("169.254.")
+		):ips.add(ip)
+	return ips
+
+class UploadHandler(SimpleHTTPRequestHandler):
+	def list_directory(self, path):
+		self._inject_upload = True
+		f = super().list_directory(path)
+		self._inject_upload = False
+		data = f.read()
+		upload_html = b'''
+			<h3>Upload</h3>
+			<form method="POST" enctype="multipart/form-data">
+				<input type="file" name="file">
+				<button type="submit">upload</button>
+			</form>
+			'''
+		data = data.replace(b"</body>\n</html>\n", upload_html + b"</body>\n</html>\n")
+		return BytesIO(data)
+
+	def send_header(self, keyword, value):
+		if getattr(self, "_inject_upload", False) and keyword.lower() == "content-length":
+			return
+		return super().send_header(keyword, value)
+
+	def do_POST(self):
+		length = int(self.headers["Content-Length"])
+		content_type = self.headers.get("Content-Type", "")
+		if "boundary=" not in content_type:
+			self.send_error(400, "Bad request")
+			return
+		boundary = content_type.split("boundary=")[1].encode()
+		body = self.rfile.read(length)
+		save_dir = self.translate_path(self.path)
+		if not os.path.isdir(save_dir):
+			save_dir = os.path.dirname(save_dir)
+		for part in body.split(b"--" + boundary):
+			if b'filename="' not in part:
+				continue
+			header, file_data = part.split(b"\r\n\r\n", 1)
+			filename = header.split(b'filename="')[1].split(b'"')[0]
+			filename = os.path.basename(filename.decode(errors="ignore"))
+			if not filename:
+				continue
+			file_data = file_data.rsplit(b"\r\n", 1)[0]
+			save_path = os.path.join(save_dir, filename)
+			with open(save_path, "wb") as f:
+				f.write(file_data)
+			print("Upload:", save_path)
+		self.send_response(303)
+		self.send_header("Location", self.path)
+		self.end_headers()
+
+
+port = 5000
+ips = get_ips()
+# print(ips)
+
 print('--------------------------------------------------------------------')
-print('WARN: !!! DO NOT CLOSE THIS WINDOW DURING USE !!!')
-print()
-print('PATH：')
-print(path)
-print()
-print("Opne the following address in browser by any device in LAN:")
-print('', *ip, end='')
+print('Open the following address in browser by any device in LAN:')
+print(f' * Running on http://127.0.0.1:{port}')
+for i in ips:
+	print(f' * Running on http://{i}:{port}')
 print('--------------------------------------------------------------------')
-print()
-
-
-def html(s):
-	return '<a href="{}">{}<a/>'.format(s, s)
-
-
-def main(dirpath):
-	dirpath1 = dirpath.replace('|', D).replace(' ', B)
-	if D == '\\':
-		files = os.popen(command + ' ' + '"' + dirpath1 + '"').readlines()
-	else:
-		files = os.popen(command + ' ' + dirpath1).readlines()
-
-	for i in range(len(files)):
-		files[i] = files[i][:-1]
-		if os.path.isdir(dirpath1 + D + files[i]):
-			files[i] += '/'
-
-	return '<h3>Index of/</h3>' + \
-		'<br/>'.join(map(html, files)) + f'''<br/><h3>Upload</h3>
-	<form action="/{dirpath}upload" enctype="multipart/form-data" method="POST">
-		<input type="file" name="file"><br/>
-		<input type="submit" value="upload">
-	</form>'''
-
-
-@app.route('/')
-def index():
-	files = os.popen(command).readlines()
-	for i in range(len(files)):
-		files[i] = files[i][:-1]
-		if os.path.isdir(files[i]):
-			files[i] += '/'
-
-	return '<h3>Index of/</h3>' + \
-		'<br/>'.join(map(html, files)) + '''<br/><h3>Upload</h3>
-	<form action="/upload" enctype="multipart/form-data" method="POST">
-		<input type="file" name="file"><br/>
-		<input type="submit" value="upload">
-	</form>'''
-
-
-@app.route('/<filename>')
-def get_file(filename):
-	return send_from_directory(path, filename)
-
-
-@app.route('/<filename>/')
-def get_dir(filename):
-	return main(filename)
-
-
-@app.route('/<dirpath>/<filename>')
-def get_file1(dirpath, filename):
-	dirpath = dirpath.replace('|', D)
-	return send_from_directory(dirpath, filename)
-
-
-@app.route('/<dirpath1>/<dirpath2>/')
-def redict(dirpath1, dirpath2):
-	return redirect('/' + dirpath1 + '|' + dirpath2 + '/')
-
-
-@app.route('/<dirpath>upload', methods=['POST', 'GET'])
-def dirupload(dirpath):
-	dirpath = dirpath.replace('|', D)
-	if request.method == 'POST':
-		f = request.files['file']
-		if f:
-			filename0 = f.filename.replace('/','').replace(':','').replace('<','').replace('>','').replace('*','').replace('?','').replace('|','').replace('"','')
-			if '\\' in filename0:
-				filename1 = 'u_' + filename0[filename0.rindex('\\') + 1:]
-				filename = 'u_' + filename0[filename0.rindex('\\') + 1:]
-			else:
-				filename1 = 'u_' + filename0
-				filename = 'u_' + filename0
-			n = 0
-			while os.path.isfile(dirpath + D + filename):
-				n += 1
-				filename = '(' + str(n) + ')' + filename1
-			print('Upload:', filename)
-			f.save(dirpath + D + filename)
-			return f'<h1>Success! Please return to previous page and refresh!<br/>File: {filename}</h1>'
-		else:
-			return '<h1>No file selected! Return to previous page and select a file!</h1>'
-	if request.method == 'GET':
-		return '<h1>Please visit home page.</h1>'
-
-
-@app.route('/upload', methods=['POST', 'GET'])
-def upload():
-	if request.method == 'POST':
-		f = request.files['file']
-		if f:
-			filename0 = f.filename.replace('/','').replace(':','').replace('<','').replace('>','').replace('*','').replace('?','').replace('|','').replace('"','')
-			if '\\' in filename0:
-				filename1 = 'u_' + filename0[filename0.rindex('\\') + 1:]
-				filename = 'u_' + filename0[filename0.rindex('\\') + 1:]
-			else:
-				filename1 = 'u_' + filename0
-				filename = 'u_' + filename0
-			n = 0
-			while os.path.isfile(filename):
-				n += 1
-				filename = '(' + str(n) + ')' + filename1
-			print('Upload:', filename)
-			f.save(filename)
-			return f'<h1>Success! Please return to previous page and refresh!<br/>File: {filename}</h1>'
-		else:
-			return '<h1>No file selected! Return to previous page and select a file!</h1>'
-	if request.method == 'GET':
-		return '<h1>Please visit home page.</h1>'
-
-
-if __name__ == '__main__':
-	app.run(host='0.0.0.0')
+server = HTTPServer(("0.0.0.0", port), UploadHandler)
+server.serve_forever()
